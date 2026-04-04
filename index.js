@@ -73,21 +73,65 @@ async function uploadToStorage(buffer, path, contentType = "image/png") {
   return supabase.storage.from("thumbnails").getPublicUrl(path).data.publicUrl;
 }
 
+// Known provider prefixes that Slotegrator prepends to game names
+// e.g. "Play'n GO Mole Digger" → strip "Play'n GO" → "Mole Digger"
+const PROVIDER_PREFIXES = [
+  "play'n go", "playn go", "play n go", "playng go",
+  "pragmatic play", "pragmaticplay",
+  "evolution gaming", "evolution",
+  "netent", "net ent",
+  "nolimit city", "nolimitcity",
+  "push gaming", "pushgaming",
+  "hacksaw gaming", "hacksawgaming",
+  "relax gaming", "relaxgaming",
+  "blueprint gaming", "blueprintgaming",
+  "big time gaming", "bigtimegaming",
+  "red tiger", "redtiger",
+  "quickspin",
+  "yggdrasil",
+  "thunderkick",
+  "elk studios", "elkstudios",
+  "iron dog studio",
+  "stakelogic",
+  "kalamba games",
+  "fantasma games",
+];
+
+/** Strip known provider prefix from a game name */
+function stripProviderPrefix(gameName) {
+  const lower = gameName.toLowerCase();
+  for (const prefix of PROVIDER_PREFIXES) {
+    if (lower.startsWith(prefix + " ")) {
+      return gameName.slice(prefix.length + 1).trim();
+    }
+  }
+  return gameName;
+}
+
 /** Match game name to best Figma slug */
 function bestFigmaMatch(gameName, figmaGames) {
-  const target = slugify(gameName);
-  const exact  = figmaGames.find(g => g.slug === target);
-  if (exact) return { ...exact, confidence: 1 };
+  // Try with original name first, then with prefix stripped
+  const namesToTry = [gameName, stripProviderPrefix(gameName)];
 
+  for (const name of namesToTry) {
+    const target = slugify(name);
+    const exact  = figmaGames.find(g => g.slug === target);
+    if (exact) return { ...exact, confidence: 1 };
+  }
+
+  // Best partial overlap across both name variants
   let best = null, bestScore = 0;
-  for (const g of figmaGames) {
-    const keyWords    = new Set(g.slug.split("-").filter(Boolean));
-    const targetWords = target.split("-").filter(Boolean);
-    const hits        = targetWords.filter(w => keyWords.has(w)).length;
-    const score       = hits / Math.max(keyWords.size, targetWords.length);
-    if (score > bestScore && score >= 0.5) {
-      bestScore = score;
-      best = { ...g, confidence: parseFloat(score.toFixed(2)) };
+  for (const name of namesToTry) {
+    const target = slugify(name);
+    for (const g of figmaGames) {
+      const keyWords    = new Set(g.slug.split("-").filter(Boolean));
+      const targetWords = target.split("-").filter(Boolean);
+      const hits        = targetWords.filter(w => keyWords.has(w)).length;
+      const score       = hits / Math.max(keyWords.size, targetWords.length);
+      if (score > bestScore && score >= 0.5) {
+        bestScore = score;
+        best = { ...g, confidence: parseFloat(score.toFixed(2)) };
+      }
     }
   }
   return best;
