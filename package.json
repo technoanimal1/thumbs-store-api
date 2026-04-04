@@ -1,0 +1,17 @@
+{
+  "name": "thumbs-store-api",
+  "version": "2.0.0",
+  "description": "thumbs.store — Figma thumbnail sync API for casino clients",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "express": "^4.18.2",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": { "node": ">=18" }
+}
