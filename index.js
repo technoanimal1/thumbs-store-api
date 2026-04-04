@@ -470,7 +470,7 @@ app.post("/admin/sync/:aggregator_slug", requireAdmin, async (req, res) => {
     // Get aggregator config from Supabase
     const { data: aggregator } = await supabase
       .from("aggregators")
-      .select("id, api_url, auth_header, auth_key")
+      .select("id, api_url, auth_header, auth_key, provider_aliases")
       .eq("slug", aggregator_slug)
       .single();
 
@@ -502,7 +502,9 @@ app.post("/admin/sync/:aggregator_slug", requireAdmin, async (req, res) => {
     let matched = 0, unmatched = 0;
 
     for (const game of games) {
-      const providerSlug = slugify(game.provider || "unknown");
+      const rawSlug = slugify(game.provider || "unknown");
+      const aliases = aggregator.provider_aliases || {};
+      const providerSlug = aliases[rawSlug] || rawSlug;
       const provider     = providerMap[providerSlug];
       const figmaMatch   = provider ? bestFigmaMatch(game.name, provider.games) : null;
 
