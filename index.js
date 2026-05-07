@@ -56,7 +56,7 @@ async function exportFigmaNode(fileKey, nodeId, format = "png") {
     `https://api.figma.com/v1/images/${fileKey}?ids=${nodeId}&format=${format}&scale=1`,
     { headers: { "X-Figma-Token": FIGMA_TOKEN } }
   );
-  if (!res.ok) throw new Error(`Figma API ${res.status}`);
+  if (!res.ok) throw new Error(`Figma API ${res.status}: ${(await res.text()).slice(0,300)}`);
   const data    = await res.json();
   const tempUrl = Object.values(data.images || {})[0];
   if (!tempUrl) throw new Error(`No image returned for ${nodeId}`);
