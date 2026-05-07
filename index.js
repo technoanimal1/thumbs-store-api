@@ -53,7 +53,7 @@ function slugify(str = "") {
 async function exportFigmaNode(fileKey, nodeId, format = "png") {
   if (!FIGMA_TOKEN) throw new Error("FIGMA_TOKEN not set");
   const res = await fetch(
-    `https://api.figma.com/v1/images/${fileKey}?ids=${encodeURIComponent(nodeId)}&format=${format}&scale=1`,
+    `https://api.figma.com/v1/images/${fileKey}?ids=${nodeId}&format=${format}&scale=1`,
     { headers: { "X-Figma-Token": FIGMA_TOKEN } }
   );
   if (!res.ok) throw new Error(`Figma API ${res.status}`);
