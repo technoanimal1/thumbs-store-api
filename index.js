@@ -41,8 +41,9 @@ const PORT        = process.env.PORT || 3000;
 const supabase = createClient(
   process.env.SUPABASE_URL || "https://cdwplbjjjbpqkmytlmaf.supabase.co",
   process.env.SUPABASE_KEY
+);
 
-  const providerCodes = {
+const providerCodes = {
     'st8':              'ST8',
     'egt-amusnet':      'EGT_AMUSNET',
     'egt-digital':      'EGT_DIGITAL',
@@ -70,8 +71,6 @@ const supabase = createClient(
     'yggdrasil':        'YGGDRASIL',
     'play-n-go':        'PLAYNGO',
 };
-);
-
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
 function slugify(str = "") {
