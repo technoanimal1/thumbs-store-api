@@ -41,6 +41,35 @@ const PORT        = process.env.PORT || 3000;
 const supabase = createClient(
   process.env.SUPABASE_URL || "https://cdwplbjjjbpqkmytlmaf.supabase.co",
   process.env.SUPABASE_KEY
+
+  const providerCodes = {
+    'st8':              'ST8',
+    'egt-amusnet':      'EGT_AMUSNET',
+    'egt-digital':      'EGT_DIGITAL',
+    'aviator':          'AVIATOR',
+    'pragmatic':        'PRAGMATIC',
+    'red-tiger':        'RED_TIGER',
+    'netent':           'NETENT',
+    'relax-gaming':     'RELAX_GAMING',
+    'habanero':         'HABANERO',
+    'endorphina':       'ENDORPHINA',
+    'nolimit-city':     'NOLIMIT_CITY',
+    '3-oaks-gaming':    '3_OAKS_GAMING',
+    'spinomenal':       'SPINOMENAL',
+    'big-time-gaming':  'BIG_TIME_GAMING',
+    'hacksaw-gaming':   'HACKSAW_GAMING',
+    'bgaming':          'BGAMING',
+    'rubyplay':         'RUBYPLAY',
+    'lambda':           'LAMBDA',
+    'gr8':              'GR8',
+    'lucky-streak':     'LUCKY_STREAK',
+    'flappybet':        'FLAPPYBET',
+    'evolution':        'EVOLUTION',
+    'playson':          'PLAYSON',
+    'wazdan':           'WAZDAN',
+    'yggdrasil':        'YGGDRASIL',
+    'play-n-go':        'PLAYNGO',
+};
 );
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -232,7 +261,9 @@ app.get("/api/thumbnails", requireApiKey, async (req, res) => {
         game_id:          m.aggregator_uuid,
         game_name:        m.game_name,
         provider:         m.providers?.name,
-        provider_slug:    m.providers?.slug,
+        provider_code:    providerCodes[m.providers?.slug] || null,
+      provider_slug:    m.providers?.slug,:    providerCodes[m.providers?.slug] || null,
+      provider_slug:    m.providers?.slug,
         type:             m.game_type,
         thumbnail_url:    m.figma_games?.storage_url || null,
         published_at:     m.figma_games?.published_at || null,
@@ -265,7 +296,8 @@ app.get("/api/thumbnails/:game_id", requireApiKey, async (req, res) => {
     game_id:          m.aggregator_uuid,
     game_name:        m.game_name,
     provider:         m.providers?.name,
-    provider_slug:    m.providers?.slug,
+    provider_code:    providerCodes[m.providers?.slug] || null,
+      provider_slug:    m.providers?.slug,
     type:             m.game_type,
     thumbnail_url:    m.figma_games?.storage_url || null,
     published_at:     m.figma_games?.published_at || null,
