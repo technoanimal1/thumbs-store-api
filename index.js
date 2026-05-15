@@ -590,22 +590,35 @@ app.post("/admin/publish/:provider_slug", requireAdmin, async (req, res) => {
 
     console.log(`🎨 Publishing ${games.length} games for ${req.params.provider_slug}...`);
 
-    for (let i = 0; i < games.length; i += 5) {
-      const batch = games.slice(i, i + 5);
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < games.length; i += BATCH_SIZE) {
+      const batch = games.slice(i, i + BATCH_SIZE);
+      const ids = batch.map(g => g.figma_node_id).join(",");
+      let images = {};
+      try {
+        const r = await fetch(`https://api.figma.com/v1/images/${provider.figma_file_key}?ids=${ids}&format=png&scale=1`, { headers: { "X-Figma-Token": FIGMA_TOKEN } });
+        if (!r.ok) throw new Error(`Figma API ${r.status}: ${(await r.text()).slice(0,300)}`);
+        const data = await r.json();
+        images = data.images || {};
+      } catch (err) {
+        batch.forEach(g => { results.failed++; results.errors.push({ slug: g.slug, error: err.message }); });
+        continue;
+      }
       await Promise.all(batch.map(async (game) => {
         try {
-          const buffer    = await exportFigmaNode(provider.figma_file_key, game.figma_node_id);
+          const tempUrl = images[game.figma_node_id];
+          if (!tempUrl) throw new Error("No image URL returned");
+          const imgRes = await fetch(tempUrl);
+          const buffer = Buffer.from(await imgRes.arrayBuffer());
           const publicUrl = await uploadToStorage(buffer, `${req.params.provider_slug}/${game.slug}.png`);
-          await supabase.from("figma_games").update({
-            storage_url: publicUrl, published_at: new Date().toISOString()
-          }).eq("id", game.id);
+          await supabase.from("figma_games").update({ storage_url: publicUrl, published_at: new Date().toISOString() }).eq("id", game.id);
           results.exported++;
         } catch (err) {
           results.failed++;
           results.errors.push({ slug: game.slug, error: err.message });
         }
       }));
-      if (i + 5 < games.length) await new Promise(r => setTimeout(r, 1000));
+      if (i + BATCH_SIZE < games.length) await new Promise(r => setTimeout(r, 1000));
     }
 
     await supabase.from("publish_log").insert({
