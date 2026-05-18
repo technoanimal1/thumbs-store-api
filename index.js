@@ -312,6 +312,141 @@ app.get("/api/thumbnails/:game_id", requireApiKey, async (req, res) => {
 // ─── ADMIN ROUTES ──────────────────────────────────────────────────────────────
 
 // GET /admin/clients
+// ============ /v1/* — versioned API for integrations ============
+// Aliases /api/thumbnails into a versioned namespace + adds nested
+// provider→games shape that Setantabet's integration expects.
+
+app.get("/v1/account", requireApiKey, async (req, res) => {
+  try {
+    const c = req.client;
+    const { data: cpRows } = await supabase
+      .from("client_providers")
+      .select("provider_id")
+      .eq("client_id", c.id);
+    const provIds = (cpRows || []).map(r => r.provider_id).filter(Boolean);
+    const { data: provs } = provIds.length
+      ? await supabase.from("providers").select("slug,name").in("id", provIds)
+      : { data: [] };
+    const { count } = await supabase
+      .from("client_games")
+      .select("*", { count: "exact", head: true })
+      .eq("client_id", c.id);
+    res.json({
+      client: c.name,
+      slug: c.slug,
+      providers: (provs || []).map(p => ({
+        slug: p.slug,
+        name: p.name,
+        code: (typeof providerCodes !== "undefined" && providerCodes[p.slug]) || null
+      })),
+      total_games: count || 0
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/v1/games", requireApiKey, async (req, res) => {
+  try {
+    const c = req.client;
+    const { data: cgRows } = await supabase
+      .from("client_games")
+      .select("catalog_mapping_id")
+      .eq("client_id", c.id)
+      .limit(10000);
+    const cmIds = (cgRows || []).map(r => r.catalog_mapping_id).filter(Boolean);
+    const { data: cmRows } = cmIds.length
+      ? await supabase
+          .from("catalog_mappings")
+          .select("id, game_name, slotegrator_uuid, slotegrator_type, provider_id, figma_game_id")
+          .in("id", cmIds)
+      : { data: [] };
+    const provIds = [...new Set((cmRows || []).map(r => r.provider_id).filter(Boolean))];
+    const { data: provs } = provIds.length
+      ? await supabase.from("providers").select("id,slug,name").in("id", provIds)
+      : { data: [] };
+    const provById = Object.fromEntries((provs || []).map(p => [p.id, p]));
+    const fgIds = (cmRows || []).map(r => r.figma_game_id).filter(Boolean);
+    const { data: fgs } = fgIds.length
+      ? await supabase.from("figma_games").select("id,slug,storage_url,published_at").in("id", fgIds)
+      : { data: [] };
+    const fgById = Object.fromEntries((fgs || []).map(f => [f.id, f]));
+    const byProv = {};
+    for (const cm of (cmRows || [])) {
+      const prov = provById[cm.provider_id];
+      if (!prov) continue;
+      const fg = fgById[cm.figma_game_id];
+      if (!byProv[prov.slug]) {
+        byProv[prov.slug] = {
+          slug: prov.slug,
+          name: prov.name,
+          code: (typeof providerCodes !== "undefined" && providerCodes[prov.slug]) || null,
+          games: []
+        };
+      }
+      byProv[prov.slug].games.push({
+        id: cm.slotegrator_uuid || (fg && fg.slug) || cm.id,
+        name: cm.game_name,
+        slug: fg ? fg.slug : null,
+        type: cm.slotegrator_type || "slots",
+        thumbnail_url: fg ? fg.storage_url : null,
+        published_at: fg ? fg.published_at : null
+      });
+    }
+    const providers = Object.values(byProv).sort((a, b) => a.slug.localeCompare(b.slug));
+    res.json({
+      client: c.name,
+      total_providers: providers.length,
+      total_games: providers.reduce((s, p) => s + p.games.length, 0),
+      providers
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/v1/games/:game_id", requireApiKey, async (req, res) => {
+  try {
+    const c = req.client;
+    const { data: cmRow } = await supabase
+      .from("catalog_mappings")
+      .select("id, game_name, slotegrator_uuid, slotegrator_type, provider_id, figma_game_id")
+      .or(`id.eq.${req.params.game_id},slotegrator_uuid.eq.${req.params.game_id}`)
+      .maybeSingle();
+    if (!cmRow) return res.status(404).json({ error: "game not found" });
+    const { data: scope } = await supabase
+      .from("client_games")
+      .select("id")
+      .eq("client_id", c.id)
+      .eq("catalog_mapping_id", cmRow.id)
+      .maybeSingle();
+    if (!scope) return res.status(404).json({ error: "game not in your scope" });
+    const { data: prov } = await supabase
+      .from("providers").select("slug,name").eq("id", cmRow.provider_id).maybeSingle();
+    const { data: fg } = cmRow.figma_game_id
+      ? await supabase.from("figma_games")
+          .select("slug,storage_url,published_at").eq("id", cmRow.figma_game_id).maybeSingle()
+      : { data: null };
+    res.json({
+      id: cmRow.slotegrator_uuid || (fg && fg.slug) || cmRow.id,
+      name: cmRow.game_name,
+      slug: fg ? fg.slug : null,
+      type: cmRow.slotegrator_type || "slots",
+      provider: prov ? {
+        slug: prov.slug,
+        name: prov.name,
+        code: (typeof providerCodes !== "undefined" && providerCodes[prov.slug]) || null
+      } : null,
+      thumbnail_url: fg ? fg.storage_url : null,
+      published_at: fg ? fg.published_at : null
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ end /v1/* ============
+
 app.get("/admin/clients", requireAdmin, async (_req, res) => {
   const { data: clients } = await supabase
     .from("clients")
