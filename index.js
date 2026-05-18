@@ -377,7 +377,7 @@ app.get("/v1/games", requireApiKey, async (req, res) => {
         };
       }
       byProv[r.provider_slug].games.push({
-        id: r.slotegrator_uuid || r.figma_slug || r.catalog_mapping_id,
+        id: r.slotegrator_uuid || r.catalog_mapping_id,
         name: r.game_name,
         slug: r.figma_slug || null,
         type: r.slotegrator_type || "slots",
@@ -420,7 +420,7 @@ app.get("/v1/games/:game_id", requireApiKey, async (req, res) => {
           .select("slug,storage_url,published_at").eq("id", cmRow.figma_game_id).maybeSingle()
       : { data: null };
     res.json({
-      id: cmRow.slotegrator_uuid || (fg && fg.slug) || cmRow.id,
+      id: cmRow.slotegrator_uuid || cmRow.id,
       name: cmRow.game_name,
       slug: fg ? fg.slug : null,
       type: cmRow.slotegrator_type || "slots",
