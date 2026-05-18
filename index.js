@@ -441,6 +441,53 @@ app.get("/v1/games/:game_id", requireApiKey, async (req, res) => {
 
 // ============ end /v1/* ============
 
+app.get("/v1/providers", requireApiKey, async (req, res) => {
+  try {
+    const c = req.client;
+    const { data: cpRows } = await supabase
+      .from("client_providers")
+      .select("provider_id")
+      .eq("client_id", c.id);
+    const provIds = (cpRows || []).map(r => r.provider_id).filter(Boolean);
+    const { data: provs } = provIds.length
+      ? await supabase.from("providers").select("id,slug,name").in("id", provIds)
+      : { data: [] };
+    const PAGE = 1000;
+    let rows = [];
+    let offset = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("client_game_view")
+        .select("provider_slug,storage_url")
+        .eq("client_id", c.id)
+        .range(offset, offset + PAGE - 1);
+      if (error) throw error;
+      if (!data || !data.length) break;
+      rows = rows.concat(data);
+      if (data.length < PAGE) break;
+      offset += PAGE;
+      if (offset > 50000) break;
+    }
+    const counts = {};
+    for (const r of rows) {
+      if (!r.provider_slug) continue;
+      if (!counts[r.provider_slug]) counts[r.provider_slug] = { games_count: 0, with_thumbnail: 0 };
+      counts[r.provider_slug].games_count++;
+      if (r.storage_url) counts[r.provider_slug].with_thumbnail++;
+    }
+    const out = (provs || []).map(p => ({
+      slug: p.slug,
+      name: p.name,
+      code: (typeof providerCodes !== "undefined" && providerCodes[p.slug]) || null,
+      games_count: (counts[p.slug] || {}).games_count || 0,
+      with_thumbnail: (counts[p.slug] || {}).with_thumbnail || 0
+    })).sort((a, b) => a.slug.localeCompare(b.slug));
+    res.json({ total: out.length, providers: out });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/admin/clients", requireAdmin, async (_req, res) => {
   const { data: clients } = await supabase
     .from("clients")
