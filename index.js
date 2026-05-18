@@ -378,6 +378,7 @@ app.get("/v1/games", requireApiKey, async (req, res) => {
       }
       byProv[r.provider_slug].games.push({
         id: r.slotegrator_uuid || r.catalog_mapping_id,
+        provider_slug: r.provider_slug,
         name: r.game_name,
         slug: r.figma_slug || null,
         type: r.slotegrator_type || "slots",
@@ -421,6 +422,7 @@ app.get("/v1/games/:game_id", requireApiKey, async (req, res) => {
       : { data: null };
     res.json({
       id: cmRow.slotegrator_uuid || cmRow.id,
+      provider_slug: prov ? prov.slug : null,
       name: cmRow.game_name,
       slug: fg ? fg.slug : null,
       type: cmRow.slotegrator_type || "slots",
