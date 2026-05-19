@@ -813,6 +813,35 @@ app.post("/admin/publish/:provider_slug", requireAdmin, async (req, res) => {
 
 
 // ── GET /admin/aggregators ────────────────────────────────────────────────────
+app.post("/admin/figma-games/bulk", requireAdmin, async (req, res) => {
+  try {
+    const { provider_id, rows } = req.body || {};
+    if (!provider_id || !Array.isArray(rows)) {
+      return res.status(400).json({ error: "provider_id + rows[] required" });
+    }
+    const records = rows.map(r => ({
+      provider_id,
+      slug: r.slug,
+      figma_node_id: r.figma_node_id,
+      created_at: new Date().toISOString()
+    }));
+    const CHUNK = 500;
+    let total = 0;
+    for (let i = 0; i < records.length; i += CHUNK) {
+      const chunk = records.slice(i, i + CHUNK);
+      const { data, error } = await supabase
+        .from("figma_games")
+        .upsert(chunk, { onConflict: "provider_id,slug", ignoreDuplicates: true })
+        .select("id");
+      if (error) throw error;
+      total += (data || []).length;
+    }
+    res.json({ inserted: total, total_submitted: records.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/admin/aggregators", requireAdmin, async (_req, res) => {
   const { data } = await supabase
     .from("aggregators")
