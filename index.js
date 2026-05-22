@@ -815,7 +815,8 @@ app.post("/admin/publish/:provider_slug", requireAdmin, async (req, res) => {
 // ── GET /admin/aggregators ────────────────────────────────────────────────────
 app.post("/admin/figma-games/bulk", requireAdmin, async (req, res) => {
   try {
-    const { provider_id, rows } = req.body || {};
+    const { provider_id, rows, variant } = req.body || {};
+    const useVariant = variant || "white";
     if (!provider_id || !Array.isArray(rows)) {
       return res.status(400).json({ error: "provider_id + rows[] required" });
     }
@@ -823,6 +824,7 @@ app.post("/admin/figma-games/bulk", requireAdmin, async (req, res) => {
       provider_id,
       slug: r.slug,
       figma_node_id: r.figma_node_id,
+      variant: useVariant,
       created_at: new Date().toISOString()
     }));
     const CHUNK = 500;
@@ -831,7 +833,7 @@ app.post("/admin/figma-games/bulk", requireAdmin, async (req, res) => {
       const chunk = records.slice(i, i + CHUNK);
       const { data, error } = await supabase
         .from("figma_games")
-        .upsert(chunk, { onConflict: "provider_id,slug", ignoreDuplicates: true })
+        .upsert(chunk, { onConflict: "provider_id,slug,variant", ignoreDuplicates: true })
         .select("id");
       if (error) throw error;
       total += (data || []).length;
