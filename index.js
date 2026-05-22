@@ -358,6 +358,8 @@ app.get("/v1/games", requireApiKey, async (req, res) => {
         .select("*")
         .eq("client_id", c.id);
       if (req.query.provider) q = q.eq("provider_slug", req.query.provider);
+      const variant = req.query.variant || "white";
+      if (variant !== "all") q = q.eq("variant", variant);
       const { data, error } = await q.range(offset, offset + PAGE - 1);
       if (error) throw error;
       if (!data || !data.length) break;
@@ -380,6 +382,7 @@ app.get("/v1/games", requireApiKey, async (req, res) => {
       byProv[r.provider_slug].games.push({
         id: r.slotegrator_uuid || r.catalog_mapping_id,
         provider_slug: r.provider_slug,
+        variant: r.variant,
         name: r.game_name,
         slug: r.figma_slug || null,
         type: r.slotegrator_type || "slots",
