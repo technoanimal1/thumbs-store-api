@@ -756,7 +756,7 @@ app.post("/admin/publish/:provider_slug", requireAdmin, async (req, res) => {
   try {
     const { data: provider } = await supabase
       .from("providers")
-      .select("id, figma_file_key, figma_games ( id, slug, figma_node_id )")
+      .select("id, figma_file_key, figma_games ( id, slug, figma_node_id, variant )")
       .eq("slug", req.params.provider_slug)
       .single();
 
