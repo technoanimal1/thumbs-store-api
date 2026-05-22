@@ -699,7 +699,7 @@ app.post("/admin/sync/:aggregator_slug", requireAdmin, async (req, res) => {
     // Load all providers + Figma games
     const { data: providers } = await supabase
       .from("providers")
-      .select("id, slug, figma_file_key, figma_games ( id, slug, figma_node_id )");
+      .select("id, slug, figma_file_key, figma_games ( id, slug, figma_node_id, variant )");
 
     const providerMap = {};
     for (const p of providers || []) {
@@ -787,7 +787,7 @@ app.post("/admin/publish/:provider_slug", requireAdmin, async (req, res) => {
           if (!tempUrl) throw new Error("No image URL returned");
           const imgRes = await fetch(tempUrl);
           const buffer = Buffer.from(await imgRes.arrayBuffer());
-          const publicUrl = await uploadToStorage(buffer, `${req.params.provider_slug}/${game.slug}.png`);
+          const publicUrl = await uploadToStorage(buffer, `${req.params.provider_slug}/${game.variant || "white"}/${game.slug}.png`);
           await supabase.from("figma_games").update({ storage_url: publicUrl, published_at: new Date().toISOString() }).eq("id", game.id);
           results.exported++;
         } catch (err) {
