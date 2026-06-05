@@ -278,7 +278,7 @@ app.get("/api/thumbnails/:game_id", requireApiKey, async (req, res) => {
   const { data, error } = await supabase
     .from("client_games")
     .select(`
-      catalog_mappings (
+      catalog_mappings!inner (
         aggregator_uuid, game_name, game_type,
         figma_node_id, figma_file_key, match_confidence, synced_at,
         providers ( slug, name ),
