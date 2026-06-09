@@ -236,7 +236,7 @@ app.get("/api/thumbnails", requireApiKey, async (req, res) => {
     .from("client_games")
     .select(`
       catalog_mappings (
-        aggregator_uuid,
+        aggregator_uuid, catalog_slug,
         game_name,
         game_type,
         match_confidence,
@@ -257,7 +257,7 @@ app.get("/api/thumbnails", requireApiKey, async (req, res) => {
     results: (data || []).map(row => {
       const m = row.catalog_mappings;
       return {
-        game_id:          m.aggregator_uuid,
+        game_id:          m.aggregator_uuid, catalog_slug: m.catalog_slug,
         game_name:        m.game_name,
         provider:         m.providers?.name,
         provider_code:    providerCodes[m.providers?.slug] || null,
