@@ -210,7 +210,7 @@ if (!apiKey) return res.status(401).json({ error: "Missing x-api-key header" });
 
 const { data: client, error } = await supabase
 .from("clients")
-.select("id, name, slug, is_active, preferred_format")
+.select("id, name, slug, is_active, preferred_format, preferred_variant")
 .eq("api_key", apiKey)
 .single();
 
@@ -342,6 +342,7 @@ res.json({
 client: c.name,
 slug: c.slug,
 preferred_format: c.preferred_format || "avif",
+preferred_variant: c.preferred_variant || "white",
 providers: (provs || []).map(p => ({
 slug: p.slug,
 name: p.name,
@@ -385,7 +386,9 @@ let q = supabase
 .select("*")
 .eq("client_id", c.id);
 if (req.query.provider) q = q.eq("provider_slug", req.query.provider);
-const variant = req.query.variant || "white";
+// Variant resolution order: explicit ?variant= query param → client's preferred_variant → "white".
+// "all" disables the filter (returns every variant; paired games appear multiple times).
+const variant = req.query.variant || c.preferred_variant || "white";
 if (variant !== "all") q = q.eq("variant", variant);
 const { data, error } = await q.range(offset, offset + PAGE - 1);
 if (error) throw error;
@@ -421,6 +424,7 @@ const providers = Object.values(byProv).sort((a, b) => a.slug.localeCompare(b.sl
 res.json({
 client: c.name,
 preferred_format: fmt || "avif",
+variant,
 total_providers: providers.length,
 total_games: providers.reduce((s, p) => s + p.games.length, 0),
 providers
