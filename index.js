@@ -377,6 +377,10 @@ licensed_providers: Array.from(licensed).sort()
 }
 }
 
+// Variant resolution order: explicit ?variant= query param → client's preferred_variant → "white".
+// "all" disables the filter (returns every variant; paired games appear multiple times).
+const variant = req.query.variant || c.preferred_variant || "white";
+
 const PAGE = 1000;
 let rows = [];
 let offset = 0;
@@ -386,9 +390,6 @@ let q = supabase
 .select("*")
 .eq("client_id", c.id);
 if (req.query.provider) q = q.eq("provider_slug", req.query.provider);
-// Variant resolution order: explicit ?variant= query param → client's preferred_variant → "white".
-// "all" disables the filter (returns every variant; paired games appear multiple times).
-const variant = req.query.variant || c.preferred_variant || "white";
 if (variant !== "all") q = q.eq("variant", variant);
 const { data, error } = await q.range(offset, offset + PAGE - 1);
 if (error) throw error;
