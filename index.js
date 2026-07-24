@@ -659,6 +659,7 @@ app.get("/v1/games", requireApiKey, async (req, res) => {
   const { provider, variant } = req.query;
 
   try {
+    // Load licensed providers
     const { data: clientProviders } = await supabase
       .from("client_providers")
       .select("provider_id, providers ( id, slug, name )")
@@ -666,9 +667,25 @@ app.get("/v1/games", requireApiKey, async (req, res) => {
 
     const licensedProviders = (clientProviders || []).map(cp => cp.providers).filter(Boolean);
 
+    // Load client-specific aliases e.g. playngo → play-n-go
+    const { data: aliases } = await supabase
+      .from("client_provider_aliases")
+      .select("alias_slug, provider_id")
+      .eq("client_id", req.client.id);
+
+    const aliasMap = {};
+    for (const a of aliases || []) aliasMap[a.alias_slug] = a.provider_id;
+
+    // Build enriched provider list with alias slugs
+    const enrichedProviders = licensedProviders.map(p => {
+      const aliasEntry = (aliases || []).find(a => a.provider_id === p.id);
+      return { ...p, response_slug: aliasEntry ? aliasEntry.alias_slug : p.slug };
+    });
+
+    // Filter by provider — check both alias and real slug
     const filteredProviders = provider
-      ? licensedProviders.filter(p => p.slug === provider)
-      : licensedProviders;
+      ? enrichedProviders.filter(p => p.response_slug === provider || p.slug === provider)
+      : enrichedProviders;
 
     if (filteredProviders.length === 0) {
       return res.status(404).json({
@@ -689,14 +706,14 @@ app.get("/v1/games", requireApiKey, async (req, res) => {
       const { data: games } = await query.order("slug");
 
       return {
-        slug: p.slug,
+        slug: p.response_slug || p.slug,
         name: p.name,
-        code: p.slug.toUpperCase().replace(/-/g, "_"),
+        code: (p.response_slug || p.slug).toUpperCase().replace(/-/g, "_"),
         games: (games || []).map(g => {
           const urls = buildThumbnailUrls(g.storage_url, req.client.preferred_format);
           const base = {
             id:            g.id,
-            provider_slug: p.slug,
+            provider_slug: p.response_slug || p.slug,
             variant:       g.variant || "white",
             name:          g.slug.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
             slug:          g.slug,
