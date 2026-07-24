@@ -644,6 +644,137 @@ app.post("/admin/aggregators", requireAdmin, async (req, res) => {
 });
 
 
+
+// ─── V1 STABLE API ────────────────────────────────────────────────────────────
+// Versioned and stable — no breaking changes ever.
+// New features added as optional fields only.
+// Breaking changes go to /v2/
+//
+// GET /v1/games?provider=evolution
+// GET /v1/games?provider=evolution&variant=white
+// GET /v1/games?provider=evolution&variant=colored
+// GET /v1/games/:provider/:slug
+
+app.get("/v1/games", requireApiKey, async (req, res) => {
+  const { provider, variant } = req.query;
+
+  try {
+    const { data: clientProviders } = await supabase
+      .from("client_providers")
+      .select("provider_id, providers ( id, slug, name )")
+      .eq("client_id", req.client.id);
+
+    const licensedProviders = (clientProviders || []).map(cp => cp.providers).filter(Boolean);
+
+    const filteredProviders = provider
+      ? licensedProviders.filter(p => p.slug === provider)
+      : licensedProviders;
+
+    if (filteredProviders.length === 0) {
+      return res.status(404).json({
+        error: "Provider not found or not licensed",
+        licensed_providers: licensedProviders.map(p => p.slug),
+      });
+    }
+
+    const providerResults = await Promise.all(filteredProviders.map(async (p) => {
+      let query = supabase
+        .from("figma_games")
+        .select("id, slug, variant, storage_url, published_at")
+        .eq("provider_id", p.id)
+        .not("storage_url", "is", null);
+
+      if (variant) query = query.eq("variant", variant);
+
+      const { data: games } = await query.order("slug");
+
+      return {
+        slug: p.slug,
+        name: p.name,
+        code: p.slug.toUpperCase().replace(/-/g, "_"),
+        games: (games || []).map(g => {
+          const urls = buildThumbnailUrls(g.storage_url, req.client.preferred_format);
+          const base = {
+            id:            g.id,
+            provider_slug: p.slug,
+            variant:       g.variant || "white",
+            name:          g.slug.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
+            slug:          g.slug,
+            type:          p.slug.includes("evolution") ? "live" : "slots",
+            thumbnail_url: urls.thumbnail_url,
+            published_at:  g.published_at,
+          };
+          if (req.client.preferred_format === "all") {
+            base.thumbnail_png  = urls.thumbnail_png;
+            base.thumbnail_avif = urls.thumbnail_avif;
+          }
+          return base;
+        }),
+      };
+    }));
+
+    const totalGames = providerResults.reduce((sum, p) => sum + p.games.length, 0);
+
+    res.json({
+      client:           req.client.name,
+      preferred_format: req.client.preferred_format || "avif",
+      variant:          variant || "all",
+      total_providers:  providerResults.length,
+      total_games:      totalGames,
+      providers:        providerResults,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /v1/games/:provider/:slug — single game
+app.get("/v1/games/:provider/:slug", requireApiKey, async (req, res) => {
+  const { provider, slug } = req.params;
+  const { variant } = req.query;
+
+  try {
+    const { data: clientProviders } = await supabase
+      .from("client_providers")
+      .select("providers ( id, slug, name )")
+      .eq("client_id", req.client.id);
+
+    const p = (clientProviders || []).map(cp => cp.providers).find(p => p && p.slug === provider);
+    if (!p) return res.status(404).json({ error: "Provider not found or not licensed" });
+
+    let query = supabase
+      .from("figma_games")
+      .select("id, slug, variant, storage_url, published_at")
+      .eq("provider_id", p.id)
+      .eq("slug", slug);
+
+    if (variant) query = query.eq("variant", variant);
+    const { data: games } = await query;
+
+    if (!games || games.length === 0) return res.status(404).json({ error: "Game not found" });
+
+    res.json({
+      id:            games[0].id,
+      provider_slug: provider,
+      slug,
+      name:          slug.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
+      variants:      games.map(g => {
+        const urls = buildThumbnailUrls(g.storage_url, req.client.preferred_format);
+        const v = { variant: g.variant || "white", thumbnail_url: urls.thumbnail_url, published_at: g.published_at };
+        if (req.client.preferred_format === "all") {
+          v.thumbnail_png  = urls.thumbnail_png;
+          v.thumbnail_avif = urls.thumbnail_avif;
+        }
+        return v;
+      }),
+      ratio:  "1:1.414",
+      format: req.client.preferred_format || "avif",
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Start ─────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
