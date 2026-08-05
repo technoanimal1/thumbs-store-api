@@ -574,36 +574,76 @@ app.post("/admin/sync/:aggregator_slug", requireAdmin, async (req, res) => {
 
 app.post("/admin/publish/:provider_slug", requireAdmin, async (req, res) => {
   try {
+    // Support ?variant=color|white (default: color)
+    const variant = req.query.variant || "color";
+
     const { data: provider } = await supabase
       .from("providers")
-      .select("id, figma_file_key, figma_games ( id, slug, figma_node_id )")
+      .select("id, figma_file_key, figma_games ( id, slug, figma_node_id, variant )")
       .eq("slug", req.params.provider_slug)
       .single();
 
     if (!provider) return res.status(404).json({ error: "Provider not found" });
 
-    const limit = req.query.limit ? parseInt(req.query.limit) : null;
-    const games = limit ? (provider.figma_games || []).slice(0, limit) : (provider.figma_games || []);
-    const results = { exported: 0, failed: 0, errors: [] };
+    // Filter to requested variant only
+    let games = (provider.figma_games || []).filter(g => g.variant === variant);
+    if (req.query.limit) games = games.slice(0, parseInt(req.query.limit));
 
-    console.log(`🎨 Publishing ${games.length} games for ${req.params.provider_slug}...`);
+    const results = { exported: 0, failed: 0, errors: [], variant };
 
-    for (let i = 0; i < games.length; i += 5) {
-      const batch = games.slice(i, i + 5);
-      await Promise.all(batch.map(async (game) => {
-        try {
-          const buffer    = await exportFigmaNode(provider.figma_file_key, game.figma_node_id);
-          const publicUrl = await uploadToStorage(buffer, `${req.params.provider_slug}/${game.slug}.png`);
-          await supabase.from("figma_games").update({
-            storage_url: publicUrl, published_at: new Date().toISOString()
-          }).eq("id", game.id);
-          results.exported++;
-        } catch (err) {
+    console.log(`🎨 Publishing ${games.length} ${variant} games for ${req.params.provider_slug}...`);
+
+    // Batch export: send up to 50 node IDs per Figma API call (much faster)
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < games.length; i += BATCH_SIZE) {
+      const batch = games.slice(i, i + BATCH_SIZE);
+      const nodeIds = batch.map(g => g.figma_node_id).join(",");
+
+      let imageMap = {};
+      try {
+        const figmaRes = await fetch(
+          `https://api.figma.com/v1/images/${provider.figma_file_key}?ids=${encodeURIComponent(nodeIds)}&format=png&scale=1`,
+          { headers: { "X-Figma-Token": FIGMA_TOKEN } }
+        );
+        const figmaData = await figmaRes.json();
+        if (figmaData.err) throw new Error(`Figma: ${figmaData.err}`);
+        imageMap = figmaData.images || {};
+      } catch (err) {
+        for (const game of batch) {
           results.failed++;
           results.errors.push({ slug: game.slug, error: err.message });
         }
-      }));
-      if (i + 5 < games.length) await new Promise(r => setTimeout(r, 1000));
+        continue;
+      }
+
+      // Download + upload each image in parallel (5 at a time)
+      for (let j = 0; j < batch.length; j += 5) {
+        const subBatch = batch.slice(j, j + 5);
+        await Promise.all(subBatch.map(async (game) => {
+          const imgUrl = imageMap[game.figma_node_id];
+          if (!imgUrl) {
+            results.failed++;
+            results.errors.push({ slug: game.slug, error: "No image URL returned" });
+            return;
+          }
+          try {
+            const imgRes   = await fetch(imgUrl);
+            const buffer   = Buffer.from(await imgRes.arrayBuffer());
+            // Correct path: thumbnails/{provider}/{variant}/{slug}.png
+            const storagePath = `thumbnails/${req.params.provider_slug}/${variant}/${game.slug}.png`;
+            const publicUrl   = await uploadToStorage(buffer, storagePath);
+            await supabase.from("figma_games").update({
+              storage_url: publicUrl, published_at: new Date().toISOString()
+            }).eq("id", game.id);
+            results.exported++;
+          } catch (err) {
+            results.failed++;
+            results.errors.push({ slug: game.slug, error: err.message });
+          }
+        }));
+      }
+
+      if (i + BATCH_SIZE < games.length) await new Promise(r => setTimeout(r, 2000));
     }
 
     await supabase.from("publish_log").insert({
