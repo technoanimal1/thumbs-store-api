@@ -743,21 +743,31 @@ async function storeGamesFeed(req, res) {
     p_provider: req.query.provider || null,
     p_variant:  req.query.variant || null,
   });
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) {
+    res.status(500).json({ error: error.message });
+    return true;
+  }
   if (data && data.error) {
+    // The dashboard declines this request — the client is not cut over, or this
+    // variant has nothing baked yet. If it still has a legacy catalogue, say so
+    // and let the caller serve that instead of an empty feed.
+    if (data.error === "unknown_client" && req.client) return false;
     const status = STORE_ERROR_STATUS[data.error] || 500;
     const body = { error: data.error === "unknown_provider" ? "Provider not found or not licensed" : data.error };
     if (data.licensed_providers) body.licensed_providers = data.licensed_providers;
-    return res.status(status).json(body);
+    res.status(status).json(body);
+    return true;
   }
   res.json(data);
+  return true;
 }
 
 app.get("/v1/games", requireApiKey, async (req, res) => {
   const { provider, variant } = req.query;
 
   try {
-    if (req.storeClient) return await storeGamesFeed(req, res);
+    if (req.storeClient && (await storeGamesFeed(req, res))) return;
+    if (!req.client) return res.status(404).json({ error: "No catalogue for this key yet" });
 
     // Load licensed providers
     const { data: clientProviders } = await supabase
@@ -855,16 +865,23 @@ async function storeGameOne(req, res) {
     p_slug:     req.params.slug,
     p_variant:  req.query.variant || null,
   });
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) {
+    res.status(500).json({ error: error.message });
+    return true;
+  }
   if (data && data.error) {
+    // Not cut over (or nothing baked) — fall back to the legacy lookup.
+    if (data.error === "unknown_client" && req.client) return false;
     const status = STORE_ERROR_STATUS[data.error] || 500;
-    return res.status(status).json({
+    res.status(status).json({
       error: data.error === "unknown_provider" ? "Provider not found or not licensed"
            : data.error === "not_found" ? "Game not found"
            : data.error,
     });
+    return true;
   }
   res.json(data);
+  return true;
 }
 
 app.get("/v1/games/:provider/:slug", requireApiKey, async (req, res) => {
@@ -872,7 +889,8 @@ app.get("/v1/games/:provider/:slug", requireApiKey, async (req, res) => {
   const { variant } = req.query;
 
   try {
-    if (req.storeClient) return await storeGameOne(req, res);
+    if (req.storeClient && (await storeGameOne(req, res))) return;
+    if (!req.client) return res.status(404).json({ error: "No catalogue for this key yet" });
 
     const { data: clientProviders } = await supabase
       .from("client_providers")
