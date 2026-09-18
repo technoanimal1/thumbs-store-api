@@ -43,6 +43,24 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
+/**
+ * The thumbs.store dashboard project. Its `api_clients` table lists the clients
+ * whose /v1/games feed is served from the dashboard's own renders (the Studio's
+ * baked thumbnails) instead of the older Figma exports in this project.
+ *
+ * A client that isn't in there keeps being served from the legacy tables, so
+ * clients move over one at a time with no flag day. Every other route — the
+ * /api/thumbnails aggregator lookups and all of /admin — stays on the legacy
+ * project regardless, so nothing else changes.
+ */
+// Reads go through SECURITY DEFINER functions (api_client_by_key,
+// api_games_feed, api_game_one), so the publishable/anon key is enough — no
+// service-role secret has to live on this host, and the dashboard's tables stay
+// unreadable to anon.
+const store = process.env.STORE_SUPABASE_URL && process.env.STORE_SUPABASE_KEY
+  ? createClient(process.env.STORE_SUPABASE_URL, process.env.STORE_SUPABASE_KEY)
+  : null;
+
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
 function slugify(str = "") {
@@ -193,22 +211,34 @@ function buildThumbnailUrls(storageUrl, preferredFormat) {
   return { thumbnail_url: avifUrl, thumbnail_png: null, thumbnail_avif: avifUrl };
 }
 
+/** Map an api_games_feed / api_game_one error marker to an HTTP status. */
+const STORE_ERROR_STATUS = { unknown_client: 401, unknown_provider: 404, unknown_variant: 400, not_found: 404 };
+
 // ─── Middleware ────────────────────────────────────────────────────────────────
 
 async function requireApiKey(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   if (!apiKey) return res.status(401).json({ error: "Missing x-api-key header" });
+  req.apiKey = apiKey;
 
-  const { data: client, error } = await supabase
+  // A client that has been migrated to the dashboard gets its /v1/games feed
+  // from there. Every other route still uses req.client (the legacy row), so a
+  // migrated client keeps whatever it had on /api/thumbnails.
+  if (store) {
+    const { data: sc } = await store.rpc("api_client_by_key", { p_api_key: apiKey });
+    if (sc) req.storeClient = sc;
+  }
+
+  const { data: client } = await supabase
     .from("clients")
     .select("id, name, slug, is_active, preferred_format")
     .eq("api_key", apiKey)
-    .single();
+    .maybeSingle();
 
-  if (error || !client) return res.status(401).json({ error: "Invalid API key" });
-  if (!client.is_active) return res.status(403).json({ error: "Account suspended. Contact thumbs.store." });
+  if (!client && !req.storeClient) return res.status(401).json({ error: "Invalid API key" });
+  if (client && !client.is_active) return res.status(403).json({ error: "Account suspended. Contact thumbs.store." });
+  if (client) req.client = client;
 
-  req.client = client;
   next();
 }
 
@@ -230,6 +260,7 @@ app.get("/health", async (_req, res) => {
 // GET /api/thumbnails — only returns THIS client's specific games
 app.get("/api/thumbnails", requireApiKey, async (req, res) => {
   const { page = 1, limit = 50 } = req.query;
+  if (!req.client) return res.status(404).json({ error: "This key has no aggregator catalogue. Use /v1/games." });
 
   const { data, error } = await supabase
     .from("client_games")
@@ -272,6 +303,7 @@ app.get("/api/thumbnails", requireApiKey, async (req, res) => {
 
 // GET /api/thumbnails/:game_id
 app.get("/api/thumbnails/:game_id", requireApiKey, async (req, res) => {
+  if (!req.client) return res.status(404).json({ error: "This key has no aggregator catalogue. Use /v1/games." });
   const { data, error } = await supabase
     .from("client_games")
     .select(`
@@ -695,10 +727,38 @@ app.post("/admin/aggregators", requireAdmin, async (req, res) => {
 // GET /v1/games?provider=evolution&variant=colored
 // GET /v1/games/:provider/:slug
 
+/**
+ * /v1/games for a client served from the dashboard project.
+ *
+ * The whole feed is assembled by api_games_feed() in the database, which keeps
+ * the licence check next to the data and sidesteps PostgREST's 1000-row cap —
+ * a branch carries several thousand games. Which providers a client sees is
+ * pure data (its branch's curated game list); nothing is re-rendered to add or
+ * drop one.
+ */
+async function storeGamesFeed(req, res) {
+  const { data, error } = await store.rpc("api_games_feed", {
+    p_api_key:  req.apiKey,
+    p_base_url: process.env.STORE_SUPABASE_URL,
+    p_provider: req.query.provider || null,
+    p_variant:  req.query.variant || null,
+  });
+  if (error) return res.status(500).json({ error: error.message });
+  if (data && data.error) {
+    const status = STORE_ERROR_STATUS[data.error] || 500;
+    const body = { error: data.error === "unknown_provider" ? "Provider not found or not licensed" : data.error };
+    if (data.licensed_providers) body.licensed_providers = data.licensed_providers;
+    return res.status(status).json(body);
+  }
+  res.json(data);
+}
+
 app.get("/v1/games", requireApiKey, async (req, res) => {
   const { provider, variant } = req.query;
 
   try {
+    if (req.storeClient) return await storeGamesFeed(req, res);
+
     // Load licensed providers
     const { data: clientProviders } = await supabase
       .from("client_providers")
@@ -786,11 +846,34 @@ app.get("/v1/games", requireApiKey, async (req, res) => {
 });
 
 // GET /v1/games/:provider/:slug — single game
+/** /v1/games/:provider/:slug for a dashboard-served client. */
+async function storeGameOne(req, res) {
+  const { data, error } = await store.rpc("api_game_one", {
+    p_api_key:  req.apiKey,
+    p_base_url: process.env.STORE_SUPABASE_URL,
+    p_provider: req.params.provider,
+    p_slug:     req.params.slug,
+    p_variant:  req.query.variant || null,
+  });
+  if (error) return res.status(500).json({ error: error.message });
+  if (data && data.error) {
+    const status = STORE_ERROR_STATUS[data.error] || 500;
+    return res.status(status).json({
+      error: data.error === "unknown_provider" ? "Provider not found or not licensed"
+           : data.error === "not_found" ? "Game not found"
+           : data.error,
+    });
+  }
+  res.json(data);
+}
+
 app.get("/v1/games/:provider/:slug", requireApiKey, async (req, res) => {
   const { provider, slug } = req.params;
   const { variant } = req.query;
 
   try {
+    if (req.storeClient) return await storeGameOne(req, res);
+
     const { data: clientProviders } = await supabase
       .from("client_providers")
       .select("providers ( id, slug, name )")
