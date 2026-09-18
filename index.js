@@ -897,7 +897,17 @@ app.get("/v1/games/:provider/:slug", requireApiKey, async (req, res) => {
       .select("providers ( id, slug, name )")
       .eq("client_id", req.client.id);
 
-    const p = (clientProviders || []).map(cp => cp.providers).find(p => p && p.slug === provider);
+    // Match the client's own identifier too, the way /v1/games does — otherwise
+    // /v1/games/pragmatic/<slug> 404s while ?provider=pragmatic works.
+    const { data: aliases } = await supabase
+      .from("client_provider_aliases")
+      .select("alias_slug, provider_id")
+      .eq("client_id", req.client.id);
+    const aliasFor = new Map((aliases || []).map(a => [a.provider_id, a.alias_slug]));
+
+    const p = (clientProviders || [])
+      .map(cp => cp.providers)
+      .find(p => p && (p.slug === provider || aliasFor.get(p.id) === provider));
     if (!p) return res.status(404).json({ error: "Provider not found or not licensed" });
 
     let query = supabase
