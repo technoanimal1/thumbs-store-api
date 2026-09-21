@@ -214,6 +214,9 @@ function buildThumbnailUrls(storageUrl, preferredFormat) {
 /** Map an api_games_feed / api_game_one error marker to an HTTP status. */
 const STORE_ERROR_STATUS = { unknown_client: 401, unknown_provider: 404, unknown_variant: 400, not_found: 404 };
 
+/** Compare identifiers ignoring case and punctuation: "Play'n GO" === "playngo". */
+const normId = (v = "") => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
 // ─── Middleware ────────────────────────────────────────────────────────────────
 
 async function requireApiKey(req, res, next) {
@@ -793,8 +796,12 @@ app.get("/v1/games", requireApiKey, async (req, res) => {
     });
 
     // Filter by provider — check both alias and real slug
+    // Compare the way the rest of the API does — ignoring case and punctuation
+    // — so 1SPIN4WIN, 1spin4win and play-n-go all resolve. Exact matching here
+    // meant a client's uppercase query 404'd on this path while working on the
+    // other one.
     const filteredProviders = provider
-      ? enrichedProviders.filter(p => p.response_slug === provider || p.slug === provider)
+      ? enrichedProviders.filter(p => normId(p.response_slug) === normId(provider) || normId(p.slug) === normId(provider))
       : enrichedProviders;
 
     if (filteredProviders.length === 0) {
@@ -907,7 +914,7 @@ app.get("/v1/games/:provider/:slug", requireApiKey, async (req, res) => {
 
     const p = (clientProviders || [])
       .map(cp => cp.providers)
-      .find(p => p && (p.slug === provider || aliasFor.get(p.id) === provider));
+      .find(p => p && (normId(p.slug) === normId(provider) || normId(aliasFor.get(p.id)) === normId(provider)));
     if (!p) return res.status(404).json({ error: "Provider not found or not licensed" });
 
     let query = supabase
