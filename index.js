@@ -739,6 +739,39 @@ app.post("/admin/aggregators", requireAdmin, async (req, res) => {
  * pure data (its branch's curated game list); nothing is re-rendered to add or
  * drop one.
  */
+/**
+ * Sign every thumbnail path in one place.
+ *
+ * The bucket is private, so a path is useless to a client until it is signed.
+ * Signing needs the service role key, which lives in the sign-thumbs function
+ * rather than on this host — this only forwards the caller's own API key, and
+ * one round trip covers the whole feed.
+ */
+async function signPaths(apiKey, paths) {
+  if (paths.length === 0) return {};
+  const res = await fetch(`${process.env.STORE_SUPABASE_URL}/functions/v1/sign-thumbs`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: process.env.STORE_SUPABASE_KEY,
+      Authorization: `Bearer ${process.env.STORE_SUPABASE_KEY}`,
+    },
+    body: JSON.stringify({ api_key: apiKey, paths, expires_in: SIGNED_URL_TTL }),
+  });
+  if (!res.ok) throw new Error(`signing failed (${res.status})`);
+  const body = await res.json();
+  if (body.error) throw new Error(`signing failed: ${body.error}`);
+  return body.signed || {};
+}
+
+/** The display variant sits beside its master: …/game.png → …/game.webp */
+const webpPath = (p) => p.replace(/\.png$/, ".webp");
+
+// A week. Long enough that a client is not re-fetching constantly, short
+// enough that a leaked URL stops working. Their side must re-read the feed
+// before this runs out rather than storing the URLs for good.
+const SIGNED_URL_TTL = Number(process.env.SIGNED_URL_TTL || 60 * 60 * 24 * 7);
+
 async function storeGamesFeed(req, res) {
   const { data, error } = await store.rpc("api_games_feed", {
     p_api_key:  req.apiKey,
@@ -761,6 +794,37 @@ async function storeGamesFeed(req, res) {
     res.status(status).json(body);
     return true;
   }
+
+  // The feed comes back with storage paths; turn them into signed URLs.
+  const providers = data.providers || [];
+  const paths = [];
+  for (const p of providers) for (const g of p.games || []) if (g.path) paths.push(g.path, webpPath(g.path));
+
+  let signed;
+  try {
+    signed = await signPaths(req.apiKey, paths);
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+    return true;
+  }
+
+  const all = req.storeClient.preferred_format === "all";
+  for (const p of providers) {
+    for (const g of p.games || []) {
+      const png = signed[g.path] || null;
+      const webp = signed[webpPath(g.path)] || null;
+      delete g.path;
+      // The WebP is roughly a tenth the size, so it is what a lobby should
+      // load; the PNG stays available as the master.
+      g.thumbnail_url = webp || png;
+      if (all) {
+        g.thumbnail_png = png;
+        g.thumbnail_webp = webp;
+      }
+    }
+  }
+  data.expires_in = SIGNED_URL_TTL;
+
   res.json(data);
   return true;
 }
@@ -887,6 +951,32 @@ async function storeGameOne(req, res) {
     });
     return true;
   }
+
+  const variants = data.variants || [];
+  const paths = [];
+  for (const v of variants) if (v.path) paths.push(v.path, webpPath(v.path));
+
+  let signed;
+  try {
+    signed = await signPaths(req.apiKey, paths);
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+    return true;
+  }
+
+  const all = req.storeClient.preferred_format === "all";
+  for (const v of variants) {
+    const png = signed[v.path] || null;
+    const webp = signed[webpPath(v.path)] || null;
+    delete v.path;
+    v.thumbnail_url = webp || png;
+    if (all) {
+      v.thumbnail_png = png;
+      v.thumbnail_webp = webp;
+    }
+  }
+  data.expires_in = SIGNED_URL_TTL;
+
   res.json(data);
   return true;
 }
