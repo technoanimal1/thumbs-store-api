@@ -23,19 +23,74 @@
  */
 
 import express  from "express";
+import crypto   from "node:crypto";
 import fetch    from "node-fetch";
 import multer   from "multer";
 import xlsx     from "xlsx";
 import { createClient } from "@supabase/supabase-js";
 
 const app     = express();
-const upload  = multer({ storage: multer.memoryStorage() });
+// Uploads are spreadsheets of game names: 10 MB is far more than any real one.
+const upload  = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+// One proxy hop (Railway) sits in front of this server, so req.ip is the real caller.
+app.set("trust proxy", 1);
 app.use(express.json());
+
+// ─── Rate limiting (in-memory, no dependency) ──────────────────────────────────
+// Per process: enough to stop a runaway client or a guessing attack, not a
+// substitute for a shared limiter if this ever runs on several instances.
+function rateLimit({ windowMs, max, keyFn }) {
+  const hits = new Map();
+  setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of hits) if (v.reset <= now) hits.delete(k);
+  }, windowMs).unref();
+  return (req, res, next) => {
+    const key = keyFn(req);
+    if (!key) return next();
+    const now = Date.now();
+    let e = hits.get(key);
+    if (!e || e.reset <= now) { e = { n: 0, reset: now + windowMs }; hits.set(key, e); }
+    e.n++;
+    res.setHeader("RateLimit-Limit", String(max));
+    res.setHeader("RateLimit-Remaining", String(Math.max(0, max - e.n)));
+    if (e.n > max) {
+      res.setHeader("Retry-After", String(Math.ceil((e.reset - now) / 1000)));
+      return res.status(429).json({ error: "Too many requests" });
+    }
+    next();
+  };
+}
+// Failed authentication attempts per caller address: after 30 in ten minutes the
+// address is refused outright, so keys and admin passwords cannot be guessed.
+const FAIL_WINDOW_MS = 10 * 60 * 1000;
+const FAIL_MAX = 30;
+const authFails = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of authFails) if (v.reset <= now) authFails.delete(k);
+}, FAIL_WINDOW_MS).unref();
+const isBlocked = (req) => {
+  const e = authFails.get(req.ip);
+  return !!e && e.reset > Date.now() && e.n >= FAIL_MAX;
+};
+const noteAuthFail = (req) => {
+  const now = Date.now();
+  let e = authFails.get(req.ip);
+  if (!e || e.reset <= now) { e = { n: 0, reset: now + FAIL_WINDOW_MS }; authFails.set(req.ip, e); }
+  e.n++;
+};
+// Every route: 600 requests a minute per address. Client routes: 240 a minute per key.
+app.use(rateLimit({ windowMs: 60_000, max: 600, keyFn: (req) => req.ip }));
+const perKeyLimit = rateLimit({ windowMs: 60_000, max: 240, keyFn: (req) => req.headers["x-api-key"] ? `k:${req.headers["x-api-key"]}` : null });
+app.use(["/api", "/v1"], perKeyLimit);
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 
 const FIGMA_TOKEN = process.env.FIGMA_TOKEN;
-const ADMIN_KEY   = process.env.ADMIN_KEY || "change_this_secret";
+// No fallback: without ADMIN_KEY the /admin routes are switched off rather than
+// protected by a password that is written in this (public) file.
+const ADMIN_KEY   = process.env.ADMIN_KEY || "";
 const PORT        = process.env.PORT || 3000;
 
 const supabase = createClient(
@@ -222,32 +277,46 @@ const normId = (v = "") => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "
 async function requireApiKey(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   if (!apiKey) return res.status(401).json({ error: "Missing x-api-key header" });
+  if (isBlocked(req)) return res.status(429).json({ error: "Too many failed attempts" });
   req.apiKey = apiKey;
 
   // A client that has been migrated to the dashboard gets its /v1/games feed
   // from there. Every other route still uses req.client (the legacy row), so a
   // migrated client keeps whatever it had on /api/thumbnails.
+  let lookupFailed = false;
   if (store) {
-    const { data: sc } = await store.rpc("api_client_by_key", { p_api_key: apiKey });
+    const { data: sc, error: scErr } = await store.rpc("api_client_by_key", { p_api_key: apiKey });
+    if (scErr) lookupFailed = true;
     if (sc) req.storeClient = sc;
   }
 
-  const { data: client } = await supabase
+  const { data: client, error: clientErr } = await supabase
     .from("clients")
     .select("id, name, slug, is_active, preferred_format")
     .eq("api_key", apiKey)
     .maybeSingle();
+  if (clientErr) lookupFailed = true;
 
-  if (!client && !req.storeClient) return res.status(401).json({ error: "Invalid API key" });
+  if (!client && !req.storeClient) {
+    // A lookup that errored says nothing about the key: answer 503 and do not
+    // count it as a guess, so an outage cannot lock real clients out.
+    if (lookupFailed) return res.status(503).json({ error: "Temporarily unavailable, try again shortly" });
+    noteAuthFail(req);
+    return res.status(401).json({ error: "Invalid API key" });
+  }
   if (client && !client.is_active) return res.status(403).json({ error: "Account suspended. Contact thumbs.store." });
   if (client) req.client = client;
 
   next();
 }
 
+const sha256 = (v) => crypto.createHash("sha256").update(String(v)).digest();
 function requireAdmin(req, res, next) {
-  if (req.headers["x-admin-key"] !== ADMIN_KEY)
-    return res.status(401).json({ error: "Unauthorized" });
+  if (!ADMIN_KEY) return res.status(503).json({ error: "Admin API is not configured" });
+  if (isBlocked(req)) return res.status(429).json({ error: "Too many failed attempts" });
+  const given = req.headers["x-admin-key"];
+  const ok = typeof given === "string" && crypto.timingSafeEqual(sha256(given), sha256(ADMIN_KEY));
+  if (!ok) { noteAuthFail(req); return res.status(401).json({ error: "Unauthorized" }); }
   next();
 }
 
