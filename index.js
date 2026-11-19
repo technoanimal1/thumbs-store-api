@@ -835,6 +835,7 @@ async function signPaths(apiKey, paths) {
 
 /** The display variant sits beside its master: …/game.png → …/game.webp */
 const webpPath = (p) => p.replace(/\.png$/, ".webp");
+const avifPath = (p) => p.replace(/\.png$/, ".avif");
 
 // A week. Long enough that a client is not re-fetching constantly, short
 // enough that a leaked URL stops working. Their side must re-read the feed
@@ -867,7 +868,7 @@ async function storeGamesFeed(req, res) {
   // The feed comes back with storage paths; turn them into signed URLs.
   const providers = data.providers || [];
   const paths = [];
-  for (const p of providers) for (const g of p.games || []) if (g.path) paths.push(g.path, webpPath(g.path));
+  for (const p of providers) for (const g of p.games || []) if (g.path) paths.push(g.path, webpPath(g.path), avifPath(g.path));
 
   let signed;
   try {
@@ -882,6 +883,7 @@ async function storeGamesFeed(req, res) {
     for (const g of p.games || []) {
       const png = signed[g.path] || null;
       const webp = signed[webpPath(g.path)] || null;
+      const avif = signed[avifPath(g.path)] || null;
       delete g.path;
       // The WebP is roughly a tenth the size, so it is what a lobby should
       // load; the PNG stays available as the master.
@@ -889,6 +891,7 @@ async function storeGamesFeed(req, res) {
       if (all) {
         g.thumbnail_png = png;
         g.thumbnail_webp = webp;
+        g.thumbnail_avif = avif;
       }
     }
   }
@@ -1023,7 +1026,7 @@ async function storeGameOne(req, res) {
 
   const variants = data.variants || [];
   const paths = [];
-  for (const v of variants) if (v.path) paths.push(v.path, webpPath(v.path));
+  for (const v of variants) if (v.path) paths.push(v.path, webpPath(v.path), avifPath(v.path));
 
   let signed;
   try {
@@ -1037,11 +1040,13 @@ async function storeGameOne(req, res) {
   for (const v of variants) {
     const png = signed[v.path] || null;
     const webp = signed[webpPath(v.path)] || null;
+    const avif = signed[avifPath(v.path)] || null;
     delete v.path;
     v.thumbnail_url = webp || png;
     if (all) {
       v.thumbnail_png = png;
       v.thumbnail_webp = webp;
+      v.thumbnail_avif = avif;
     }
   }
   data.expires_in = SIGNED_URL_TTL;
